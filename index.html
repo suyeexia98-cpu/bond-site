@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>月度债券数据上传</title>
+  <!-- 引入必要的SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- 样式优化 -->
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .upload-container { margin: 30px auto; text-align: center; padding: 20px; border: 1px dashed #ccc; max-width: 800px; border-radius: 8px; background: #f9f9f9; }
+    #upload-status { margin-top: 15px; text-align: left; color: #333; font-size: 14px; line-height: 1.6; max-height: 300px; overflow-y: auto; }
+    #uploaded-tip { margin-top: 15px; color: #28a745; font-weight: bold; display: none; }
+    button { cursor: pointer; }
+  </style>
+</head>
+<body>
+  <!-- ========== 如需添加原有网站内容，粘贴到这里 ========== -->
+  <!-- 比如：你的原有按钮、表格、文字等，直接复制到这个位置 -->
+  <!-- ====================================================== -->
+
+  <!-- 上传功能模块 -->
+  <div class="upload-container">
+    <h3>📊 本月债券数据上传</h3>
+    <p style="color: #666; margin: 10px 0;">支持同时选4个Excel文件（上交所/上清所/深交所/中债登），传过的文件会自动提示</p>
+    <input type="file" id="excel-upload" accept=".xlsx,.xls" multiple style="padding: 10px; margin: 10px 0; font-size: 14px;"/>
+    <button onclick="uploadExcel()" style="padding: 10px 30px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 14px;">上传本月数据</button>
+    <div id="uploaded-tip">✅ 本月4类文件已全部上传完成，无需重复操作！</div>
+    <div id="upload-status"></div>
+  </div>
+
+  <!-- 核心JS（已填入你的Supabase信息） -->
+  <script>
+    // ========== 已配置你的Supabase信息 ==========
+    const supabaseUrl = "https://wdcheezvqovvxnbqlryq.supabase.co";
+    const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndkY2hlZXp2cW92dnhuYnFscnlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTQyODksImV4cCI6MjA4OTU5MDI4OX0.5pEpNZ6T8v_62GYM-Ih9sjzooZxtYW5eTVGaN455EOo";
+    // ===========================================
+
+    // 初始化Supabase（无重复声明）
+    const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
+
+    // 全局变量
+    const now = new Date();
+    const currentMonth = `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+    const fileTypes = ["上交所", "上清所", "深交所", "中债登"];
+
+    // 页面加载检查已上传文件
+    window.onload = async function() {
+      await checkCurrentMonthUploaded();
+    };
+
+    // 检查本月是否上传全部文件
+    async function checkCurrentMonthUploaded() {
+      try {
+        const { data, error } = await supabaseClient
+          .from('bond_monthly_data')
+          .select('file_type')
+          .like('file_name', `%${currentMonth}%`);
+
+        if (error) throw error;
+        if (!data || data.length === 0) return;
+
+        const uploadedTypes = [...new Set(data.map(item => item.file_type))];
+        const isAllUploaded = fileTypes.every(type => uploadedTypes.includes(type));
+        if (isAllUploaded) {
+          document.getElementById('uploaded-tip').style.display = 'block';
+          document.getElementById('excel-upload').disabled = true;
+          document.querySelector('button[onclick="uploadExcel()"]').disabled = true;
+          document.querySelector('button[onclick="uploadExcel()"]').style.opacity = 0.6;
+        }
+      } catch (err) {
+        console.error("检查已上传文件失败：", err);
+        document.getElementById('upload-status').innerHTML = `<p style='color: red;'>⚠️ 检查历史数据失败：${err.message}</p>`;
+      }
+    }
+
+    // 上传函数
+    async function uploadExcel() {
+      const fileInput = document.getElementById('excel-upload');
+      const statusBox = document.getElementById('upload-status');
+      const files = fileInput.files;
+      statusBox.innerHTML = "";
+      let successCount = 0, failCount = 0;
+
+      if (files.length === 0) {
+        statusBox.innerHTML = "<span style='color: red;'>❌ 请按住Ctrl键选择Excel文件（可多选）！</span>";
+        return;
+      }
+
+      // 获取已上传类型
+      let uploadedTypes = [];
+      try {
+        const { data } = await supabaseClient
+          .from('bond_monthly_data')
+          .select('file_type')
+          .like('file_name', `%${currentMonth}%`);
+        uploadedTypes = data ? [...new Set(data.map(item => item.file_type))] : [];
+      } catch (err) {
+        console.error("获取已上传文件失败：", err);
+      }
+
+      // 遍历上传
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileName = file.name;
+
+        // 校验格式
+        if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) {
+          statusBox.innerHTML += `<p style='color: red;'>❌ ${fileName}：仅支持.xlsx/.xls格式！</p>`;
+          failCount++;
+          continue;
+        }
+
+        // 校验本月标识
+        if (!fileName.includes(currentMonth)) {
+          statusBox.innerHTML += `<p style='color: orange;'>⚠️ ${fileName}：文件名未含本月标识${currentMonth}，请检查！</p>`;
+          failCount++;
+          continue;
+        }
+
+        // 识别类型
+        let fileType = "其他";
+        if (fileName.includes("上交所")) fileType = "上交所";
+        else if (fileName.includes("上清所")) fileType = "上清所";
+        else if (fileName.includes("深交所")) fileType = "深交所";
+        else if (fileName.includes("中债登")) fileType = "中债登";
+        if (fileType === "其他") {
+          statusBox.innerHTML += `<p style='color: red;'>❌ ${fileName}：无法识别类型！</p>`;
+          failCount++;
+          continue;
+        }
+
+        // 校验重复
+        if (uploadedTypes.includes(fileType)) {
+          statusBox.innerHTML += `<p style='color: orange;'>⚠️ ${fileName}：本月${fileType}文件已上传！</p>`;
+          failCount++;
+          continue;
+        }
+
+        // 上传核心逻辑
+        try {
+          statusBox.innerHTML += `<p style='color: #666;'>⏳ ${fileName}：正在上传...</p>`;
+          const fileContent = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = (err) => reject(err);
+          });
+
+          const { error } = await supabaseClient
+            .from('bond_monthly_data')
+            .insert([{
+              file_name: fileName,
+              file_type: fileType,
+              file_content: fileContent
+            }]);
+
+          if (error) throw error;
+
+          statusBox.innerHTML += `<p style='color: green;'>✅ ${fileName}：上传成功！</p>`;
+          successCount++;
+          uploadedTypes.push(fileType);
+        } catch (err) {
+          statusBox.innerHTML += `<p style='color: red;'>❌ ${fileName}：上传失败 - ${err.message}</p>`;
+          failCount++;
+        }
+      }
+
+      // 汇总
+      statusBox.innerHTML += `<hr><p style='font-weight: bold;'>📊 本次上传：成功${successCount}个 | 失败${failCount}个</p>`;
+      fileInput.value = "";
+      await checkCurrentMonthUploaded();
+    }
+  </script>
+</body>
+</html>
